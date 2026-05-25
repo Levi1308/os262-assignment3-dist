@@ -101,7 +101,53 @@ sys_uptime(void)
 uint64
 sys_flip_display(void)
 {
-  return -1;
+  uint64 buf;
+  uint64 len = (uint64)GPU_FB_PAGES * PGSIZE;
+  struct proc *p = myproc();
+  uint64 *pa_list;
+  int ret = -1;
+
+  argaddr(0, &buf);
+
+  if(buf == 0)
+    return -1;
+  if((buf % PGSIZE) != 0)
+    return -1;
+  if(buf + len < buf)
+    return -1;
+  if(buf >= MAXVA || buf + len > MAXVA)
+    return -1;
+
+  pa_list = (uint64 *)kalloc();
+  if(pa_list == 0)
+    return -1;
+
+  for(int i = 0; i < GPU_FB_PAGES; i++){
+    uint64 va = buf + (uint64)i * PGSIZE;
+    pte_t *pte = walk(p->pagetable, va, 0);
+
+    if(pte == 0)
+      goto out;
+    if((*pte & PTE_V) == 0)
+      goto out;
+    if((*pte & PTE_U) == 0)
+      goto out;
+    if(PTE_FLAGS(*pte) == PTE_V)
+      goto out;
+
+    pa_list[i] = PTE2PA(*pte);
+    if(pa_list[i] == 0 || (pa_list[i] % PGSIZE) != 0)
+      goto out;
+  }
+
+  if(virtio_gpu_flip(pa_list, GPU_FB_PAGES) < 0)
+    goto out;
+
+  ret = 0;
+
+out:
+  kfree((void *)pa_list);
+  return ret;
 }
 
 // sys_map_display: map the GPU's kernel framebuffer pages (fb[]) directly
@@ -133,6 +179,10 @@ sys_map_display(void)
   }
 
   if(p->display_map_npages != 0)
+    return -1;
+
+  // Ensure the display scans out from kernel fb[] when using map mode.
+  if(virtio_gpu_use_kernel_fb() < 0)
     return -1;
 
   // Reject invalid user ranges before touching page tables.

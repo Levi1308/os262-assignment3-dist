@@ -159,6 +159,10 @@ static struct
 
 static struct virtio_gpu_ctrl_hdr cmd_resp;
 
+// Current flip owner and last flipped physical pages (if any).
+static int flip_owner_pid = -1;
+static uint64 flip_owner_pa[FB_PAGES];
+
 // ── 8x8 bitmap font — full printable ASCII 0x20-0x7E ─────────────────
 // Bit 7 of each byte = leftmost pixel in that row.
 // Based on the public-domain font8x8_basic table.
@@ -560,6 +564,71 @@ int virtio_gpu_fb_page_pa(int index, uint64 *pa)
         return -1;
     *pa = (uint64)fb[index];
     return 0;
+}
+
+// Flip display backing to caller-provided physical pages (zero-copy).
+// page_pa must contain exactly FB_PAGES page-aligned physical addresses.
+int virtio_gpu_flip(uint64 *page_pa, int npages)
+{
+    static struct virtio_gpu_mem_entry flip_entries[FB_PAGES];
+
+    if (page_pa == 0 || npages != FB_PAGES)
+        return -1;
+
+    for (int i = 0; i < FB_PAGES; i++)
+    {
+        if (page_pa[i] == 0 || (page_pa[i] % PGSIZE) != 0)
+            return -1;
+        flip_entries[i].addr = page_pa[i];
+        flip_entries[i].length = PGSIZE;
+        flip_entries[i].padding = 0;
+    }
+
+    gpu_cmd_detach();
+    gpu_cmd_attach(flip_entries, FB_PAGES);
+    gpu_transfer_flush();
+
+    struct proc *p = myproc();
+    flip_owner_pid = p ? p->pid : -1;
+    for (int i = 0; i < FB_PAGES; i++)
+        flip_owner_pa[i] = page_pa[i];
+
+    return 0;
+}
+
+// Restore display backing to the kernel framebuffer pages (fb[]).
+int virtio_gpu_use_kernel_fb(void)
+{
+    static struct virtio_gpu_mem_entry fb_entries[FB_PAGES];
+
+    for (int i = 0; i < FB_PAGES; i++)
+    {
+        uint64 pa;
+        if (virtio_gpu_fb_page_pa(i, &pa) < 0)
+            return -1;
+        fb_entries[i].addr = pa;
+        fb_entries[i].length = PGSIZE;
+        fb_entries[i].padding = 0;
+    }
+
+    gpu_cmd_detach();
+    gpu_cmd_attach(fb_entries, FB_PAGES);
+    flip_owner_pid = -1;
+    return 0;
+}
+
+// If the process currently owning flip-backed display exits, preserve
+// the last visible frame in kernel fb[] and switch backing back to fb[].
+void virtio_gpu_on_proc_exit(int pid)
+{
+    if (pid <= 0 || pid != flip_owner_pid)
+        return;
+
+    for (int i = 0; i < FB_PAGES; i++)
+        memmove(fb[i], (void *)flip_owner_pa[i], PGSIZE);
+
+    if (virtio_gpu_use_kernel_fb() == 0)
+        gpu_transfer_flush();
 }
 
 // ── GPU daemon ────────────────────────────────────────────────────────

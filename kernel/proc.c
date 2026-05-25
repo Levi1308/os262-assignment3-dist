@@ -157,6 +157,8 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  virtio_gpu_on_proc_exit(p->pid);
+
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
