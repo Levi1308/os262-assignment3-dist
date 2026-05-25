@@ -548,6 +548,20 @@ void virtio_gpu_commit(void)
     gpu_transfer_flush();
 }
 
+// Return the physical address of kernel framebuffer page index.
+// Exposed for sys_map_display(); does not transfer ownership.
+int virtio_gpu_fb_page_pa(int index, uint64 *pa)
+{
+    if (pa == 0)
+        return -1;
+    if (index < 0 || index >= FB_PAGES)
+        return -1;
+    if (fb[index] == 0)
+        return -1;
+    *pa = (uint64)fb[index];
+    return 0;
+}
+
 // ── GPU daemon ────────────────────────────────────────────────────────
 // Kernel process started by kproc_create().  Wakes every DISPLAY_DAEMON_TICKS
 // timer ticks and issues TRANSFER_TO_HOST_2D + RESOURCE_FLUSH so that

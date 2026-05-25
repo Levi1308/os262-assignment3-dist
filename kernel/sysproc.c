@@ -116,5 +116,66 @@ sys_flip_display(void)
 uint64
 sys_map_display(void)
 {
+  uint64 addr;
+  uint64 base;
+  uint64 len = (uint64)GPU_FB_PAGES * PGSIZE;
+  struct proc *p = myproc();
+  int mapped = 0;
+
+  argaddr(0, &addr);
+
+  if(addr == 0){
+    base = PGROUNDUP(p->sz);
+  } else {
+    if(addr % PGSIZE)
+      return -1;
+    base = addr;
+  }
+
+  if(p->display_map_npages != 0)
+    return -1;
+
+  // Reject invalid user ranges before touching page tables.
+  if(base >= TRAPFRAME)
+    return -1;
+  if(base + len < base)
+    return -1;
+  if(base + len > TRAPFRAME)
+    return -1;
+
+  // Verify target VA range is entirely unmapped to avoid mappages() panic.
+  for(int i = 0; i < GPU_FB_PAGES; i++){
+    uint64 va = base + (uint64)i * PGSIZE;
+    pte_t *pte = walk(p->pagetable, va, 0);
+    uint64 pa;
+
+    if(pte && (*pte & PTE_V))
+      return -1;
+    if(virtio_gpu_fb_page_pa(i, &pa) < 0)
+      return -1;
+    if((pa % PGSIZE) != 0)
+      return -1;
+  }
+
+  // Map all GPU framebuffer pages with user RW permissions.
+  for(int i = 0; i < GPU_FB_PAGES; i++){
+    uint64 pa;
+    uint64 va = base + (uint64)i * PGSIZE;
+
+    if(virtio_gpu_fb_page_pa(i, &pa) < 0)
+      goto rollback;
+    if(mappages(p->pagetable, va, PGSIZE, pa, PTE_U|PTE_R|PTE_W) < 0)
+      goto rollback;
+    mapped++;
+  }
+
+  p->display_map_base = base;
+  p->display_map_npages = GPU_FB_PAGES;
+
+  return base;
+
+rollback:
+  if(mapped > 0)
+    uvmunmap(p->pagetable, base, mapped, 0);
   return -1;
 }

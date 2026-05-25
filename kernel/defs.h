@@ -88,7 +88,7 @@ int             fork(void);
 int             growproc(int);
 void            proc_mapstacks(pagetable_t);
 pagetable_t     proc_pagetable(struct proc *);
-void            proc_freepagetable(pagetable_t, uint64);
+void            proc_freepagetable(pagetable_t, uint64, uint64, int);
 int             kill(int);
 int             killed(struct proc*);
 void            setkilled(struct proc*);
@@ -190,6 +190,7 @@ void            virtio_disk_intr(void);
 void            virtio_gpu_init(void);
 void            virtio_gpu_commit(void);
 void            display_daemon(void);
+int             virtio_gpu_fb_page_pa(int, uint64 *);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

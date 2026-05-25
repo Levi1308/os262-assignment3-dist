@@ -124,6 +124,8 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->display_map_base = 0;
+  p->display_map_npages = 0;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -159,9 +161,12 @@ freeproc(struct proc *p)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
   if(p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
+    proc_freepagetable(p->pagetable, p->sz,
+                       p->display_map_base, p->display_map_npages);
   p->pagetable = 0;
   p->sz = 0;
+  p->display_map_base = 0;
+  p->display_map_npages = 0;
   p->pid = 0;
   p->parent = 0;
   p->name[0] = 0;
@@ -208,8 +213,39 @@ proc_pagetable(struct proc *p)
 // Free a process's page table, and free the
 // physical memory it refers to.
 void
-proc_freepagetable(pagetable_t pagetable, uint64 sz)
+proc_freepagetable(pagetable_t pagetable, uint64 sz,
+                   uint64 display_map_base, int display_map_npages)
 {
+  // map_display() installs GPU-backed leaf PTEs that must be removed
+  // without freeing their physical pages.
+  if(display_map_npages > 0){
+    uint64 map_len = (uint64)display_map_npages * PGSIZE;
+    int ok = 1;
+
+    if((display_map_base % PGSIZE) != 0)
+      ok = 0;
+    if(display_map_base >= TRAPFRAME)
+      ok = 0;
+    if(display_map_base + map_len < display_map_base)
+      ok = 0;
+    if(display_map_base + map_len > TRAPFRAME)
+      ok = 0;
+
+    if(ok){
+      for(int i = 0; i < display_map_npages; i++){
+        uint64 va = display_map_base + (uint64)i * PGSIZE;
+        pte_t *pte = walk(pagetable, va, 0);
+        if(pte == 0 || (*pte & PTE_V) == 0 || PTE_FLAGS(*pte) == PTE_V){
+          ok = 0;
+          break;
+        }
+      }
+    }
+
+    if(ok)
+      uvmunmap(pagetable, display_map_base, display_map_npages, 0);
+  }
+
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);

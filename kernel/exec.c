@@ -74,6 +74,8 @@ exec(char *path, char **argv)
 
   p = myproc();
   uint64 oldsz = p->sz;
+  uint64 old_display_map_base = p->display_map_base;
+  int old_display_map_npages = p->display_map_npages;
 
   // Allocate two pages at the next page boundary.
   // Make the first inaccessible as a stack guard.
@@ -124,15 +126,18 @@ exec(char *path, char **argv)
   oldpagetable = p->pagetable;
   p->pagetable = pagetable;
   p->sz = sz;
+  p->display_map_base = 0;
+  p->display_map_npages = 0;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
-  proc_freepagetable(oldpagetable, oldsz);
+  proc_freepagetable(oldpagetable, oldsz,
+                     old_display_map_base, old_display_map_npages);
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
  bad:
   if(pagetable)
-    proc_freepagetable(pagetable, sz);
+    proc_freepagetable(pagetable, sz, 0, 0);
   if(ip){
     iunlockput(ip);
     end_op();
